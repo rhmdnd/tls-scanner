@@ -28,59 +28,55 @@ print_header() {
     echo "========================================================================"
 }
 
-# Function to check for errors and exit if one occurs
-check_error() {
-    if [ $? -ne 0 ]; then
-        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        echo "An error occurred during: '$1'"
-        echo "Exiting script."
-        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        exit 1
-    fi
-}
-
-# Function to check for required commands
+# Function to check if a command exists
 check_command() {
-    if ! command -v "$1" &> /dev/null; then
+    if ! command -v $1 &> /dev/null; then
         echo "Error: Required command '$1' is not installed or not in PATH."
         exit 1
     fi
 }
 
-build_image() {
-    print_header "Step 1: Building Scanner Image"
-    echo "--> Building image: ${SCANNER_IMAGE}"
-
-    # Use 'docker' or 'podman' based on what's available
-    BUILD_CMD="docker"
-    if command -v podman &> /dev/null; then
-        BUILD_CMD="podman"
+# Function to check the last command's exit status
+check_error() {
+    if [ $? -ne 0 ]; then
+        echo "Error: $1 failed."
+        exit 1
     fi
-    check_command $BUILD_CMD
+}
 
-    # Build the Go binary statically
-    go build -o tls-scanner .
+build_image() {
+    print_header "Step 1: Building Container Image"
+    check_command "podman" || check_command "docker"
+    check_command "go"
+
+    echo "--> Building Go binary..."
+    CGO_ENABLED=0 GOOS=linux go build -o tls-scanner .
     check_error "Go build"
 
-    $BUILD_CMD build -t "${SCANNER_IMAGE}" .
-    check_error "Container image build"
-    echo "--> Image build complete."
+    echo "--> Building container image: ${SCANNER_IMAGE}"
+    if command -v podman &> /dev/null; then
+        podman build -t ${SCANNER_IMAGE} .
+        check_error "Podman build"
+    elif command -v docker &> /dev/null; then
+        docker build -t ${SCANNER_IMAGE} .
+        check_error "Docker build"
+    fi
+    echo "--> Image built: ${SCANNER_IMAGE}"
 }
 
 push_image() {
-    print_header "Step 2: Pushing Scanner Image"
-    echo "--> Pushing image: ${SCANNER_IMAGE}"
-    
-    # Use 'docker' or 'podman' based on what's available
-    BUILD_CMD="docker"
-    if command -v podman &> /dev/null; then
-        BUILD_CMD="podman"
-    fi
-    check_command $BUILD_CMD
+    print_header "Step 2: Pushing Container Image"
+    check_command "podman" || check_command "docker"
 
-    $BUILD_CMD push "${SCANNER_IMAGE}"
-    check_error "Image push"
-    echo "--> Image push complete."
+    echo "--> Pushing container image: ${SCANNER_IMAGE}"
+    if command -v podman &> /dev/null; then
+        podman push ${SCANNER_IMAGE}
+        check_error "Podman push"
+    elif command -v docker &> /dev/null; then
+        docker push ${SCANNER_IMAGE}
+        check_error "Docker push"
+    fi
+    echo "--> Image pushed: ${SCANNER_IMAGE}"
 }
 
 deploy_scanner_job() {
@@ -91,18 +87,21 @@ deploy_scanner_job() {
         echo "Error: Could not determine OpenShift project. Please set NAMESPACE or run 'oc project <name>'."
         exit 1
     fi
-    echo "--> Deploying to namespace: $NAMESPACE"
+    echo "--> Deploying to namespace: ${NAMESPACE}"
 
-    echo "--> Creating necessary RBAC permissions..."
-    # Grant cluster-reader to the default service account in the target namespace
+    echo "--> Ensuring 'default' ServiceAccount exists in namespace '${NAMESPACE}'..."
+    oc get sa default -n "$NAMESPACE" &> /dev/null || oc create sa default -n "$NAMESPACE"
+    check_error "Creating ServiceAccount"
+
+    echo "--> Granting 'cluster-reader' ClusterRole to 'default' ServiceAccount..."
     oc adm policy add-cluster-role-to-user cluster-reader -z default -n "$NAMESPACE"
-    check_error "Granting cluster-reader"
-    
-    # The pod exec role is necessary for detailed process scanning within pods
+    check_error "Adding cluster-reader role"
+
+    echo "--> Granting 'privileged' SCC to 'default' ServiceAccount..."
     oc adm policy add-scc-to-user privileged -z default -n "$NAMESPACE"
     check_error "Adding privileged SCC"
 
-    echo "--> Creating additional RBAC permissions for cross-namespace resource access..."
+    echo "--> Creating ClusterRole 'tls-scanner-cross-namespace' for cross-namespace resource access..."
 cat <<EOF | oc apply -f -
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -132,12 +131,15 @@ rules:
 EOF
     check_error "Creating tls-scanner-cross-namespace ClusterRole"
 
+    echo "--> Binding 'tls-scanner-cross-namespace' ClusterRole to 'default' ServiceAccount..."
     oc adm policy add-cluster-role-to-user tls-scanner-cross-namespace -z default -n "$NAMESPACE"
     check_error "Binding tls-scanner-cross-namespace ClusterRole"
 
     echo "--> Copying global pull secret to allow image pulls from CI registry..."
     oc get secret pull-secret -n openshift-config -o yaml | sed "s/namespace: .*/namespace: $NAMESPACE/" | oc apply -n "$NAMESPACE" -f -
     check_error "Copying pull secret"
+    oc secrets link default pull-secret --for=pull -n "$NAMESPACE"
+    check_error "Linking pull secret"
 
     echo "--> Applying Job manifest from template: ${JOB_TEMPLATE}"
     if [ ! -f "$JOB_TEMPLATE" ]; then
@@ -146,23 +148,100 @@ EOF
     fi
     
     # Substitute environment variables in the template and apply it
-    sed -e "s|\${SCANNER_IMAGE}|${SCANNER_IMAGE}|g" -e "s|\${NAMESPACE}|${NAMESPACE}|g" -e "s|\${JOB_NAME}|${JOB_NAME}|g" "$JOB_TEMPLATE" | oc apply -f -
+    sed -e "s|\\${SCANNER_IMAGE}|${SCANNER_IMAGE}|g" -e "s|\\${NAMESPACE}|${NAMESPACE}|g" -e "s|\\${JOB_NAME}|${JOB_NAME}|g" "$JOB_TEMPLATE" | oc apply -f -
     check_error "Applying Job manifest"
 
     echo "--> Scanner Job '${JOB_NAME}' deployed."
-    echo "--> To monitor, run: oc logs -f job/tls-scanner-job -n ${NAMESPACE}"
-    echo "--> Waiting for job to complete... (this may take a long time)"
+    
+    echo "--> Waiting for scanner pod to be created and start running..."
+    POD_RUNNING=false
+    # Wait up to 10 minutes (60 * 10s) for the pod to start.
+    for i in {1..60}; do
+        POD_NAME=$(oc get pods -n "${NAMESPACE}" -l job-name=${JOB_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -z "$POD_NAME" ]; then
+            echo "    Pod for job not created yet. Waiting... (${i}/60)"
+            sleep 10
+            continue
+        fi
+
+        POD_PHASE=$(oc get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+        
+        if [ "$POD_PHASE" = "Running" ]; then
+            echo "--> Pod '${POD_NAME}' is now running."
+            POD_RUNNING=true
+            break
+        elif [ "$POD_PHASE" = "Failed" ] || [ "$POD_PHASE" = "Error" ]; then
+            echo "Error: Pod '${POD_NAME}' failed to start. Final phase: $POD_PHASE"
+            echo "--- Describing failed pod for details ---"
+            oc describe pod "${POD_NAME}" -n "${NAMESPACE}"
+            echo "--- End of pod description ---"
+            exit 1
+        elif [ "$POD_PHASE" = "Succeeded" ]; then
+             echo "--> Pod '${POD_NAME}' completed very quickly. Assuming success and proceeding to wait for job completion."
+             POD_RUNNING=true
+             break
+        else
+            echo "    Pod status is '${POD_PHASE}'. Waiting... (${i}/60)"
+            # Check for common container-level waiting issues
+            REASON=$(oc get pod "${POD_NAME}" -n "${NAMESPACE}" -o jsonpath='{.status.containerStatuses[0].state.waiting.reason}' 2>/dev/null)
+            if [ -n "$REASON" ]; then
+                 echo "    Container waiting reason: ${REASON}. This may indicate an image pull or configuration issue."
+            fi
+            sleep 10
+        fi
+    done
+
+    if ! $POD_RUNNING; then
+        echo "Error: Pod did not start running within 10 minutes."
+        if [ -n "$POD_NAME" ]; then
+            echo "--- Describing non-running pod for details ---"
+            oc describe pod "${POD_NAME}" -n "${NAMESPACE}"
+            echo "--- End of pod description ---"
+        else
+            echo "--- No pod was created for the job. Describing job for details ---"
+            oc describe job "${JOB_NAME}" -n "${NAMESPACE}"
+            echo "--- End of job description ---"
+        fi
+        exit 1
+    fi
+
+    echo "--> To monitor logs, run: oc logs -f job/${JOB_NAME} -n ${NAMESPACE}"
+    echo "--> Waiting for job to complete... (timeout: 3h)"
 
     # Wait for the job to complete
+    if ! oc wait --for=condition=complete "job/${JOB_NAME}" -n "${NAMESPACE}" --timeout=3h; then
+        echo "Error: Scanner Job did not complete successfully or timed out."
+        # Attempt to get logs and describe the pod for debugging
+        POD_NAME=$(oc get pods -n "${NAMESPACE}" -l job-name=${JOB_NAME} -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+        if [ -n "$POD_NAME" ]; then
+            echo "--- Describing scanner pod for more details ---"
+            oc describe pod "$POD_NAME" -n "${NAMESPACE}"
+            echo "--- End of pod description ---"
+            echo "--- Logs from scanner pod ---"
+            oc logs "$POD_NAME" -n "${NAMESPACE}"
+            echo "--- End of scanner pod logs ---"
+        else
+            echo "Warning: Could not find scanner pod for job ${JOB_NAME}."
+        fi
+        exit 1
+    fi
+    echo "Job completed successfully."
+
+    # Copy artifacts from the completed job
+    echo "Copying artifacts..."
+    POD_NAME=$(oc get pods -n "${NAMESPACE}" -l job-name=${JOB_NAME} -o jsonpath='{.items[0].metadata.name}')
+    if [ -n "$POD_NAME" ]; then
+        oc cp "${NAMESPACE}/${POD_NAME}:/artifacts/." ./artifacts/
+        check_error "Copying artifacts"
+        echo "Artifacts copied to ./artifacts/"
+    else
+        echo "Warning: Could not find scanner pod to copy artifacts from."
+    fi
 }
 
 cleanup() {
     print_header "Step 4: Cleaning Up Resources"
     check_command "oc"
-
-    if [ -z "$NAMESPACE" ]; then
-        echo "Warning: Could not determine OpenShift project for cleanup. Assuming 'default' or last-used."
-    fi
 
     echo "--> Deleting Job '${JOB_NAME}' in namespace '${NAMESPACE}'..."
     oc delete job "$JOB_NAME" -n "$NAMESPACE" --ignore-not-found=true
@@ -177,17 +256,17 @@ cleanup() {
 
     echo "--> Deleting pull secret link..."
     oc secrets unlink default pull-secret -n "$NAMESPACE" || true
+    check_error "Deleting pull secret link"
+
+    echo "--> Deleting pull secret..."
+    oc delete secret pull-secret -n "$NAMESPACE" --ignore-not-found=true
+    check_error "Deleting pull secret"
 
     echo "--> Cleanup complete."
 }
 
-# --- Main Script Logic ---
-
-# Check for required commands at the start
-check_command "go"
-check_command "oc"
-
-ACTION=${1:-"default"}
+# --- Main Logic ---
+ACTION=$1
 
 case "$ACTION" in
     build)
@@ -207,18 +286,12 @@ case "$ACTION" in
         push_image
         deploy_scanner_job
         ;;
-    default)
+    *)
+        echo "No action specified, running full-deploy and cleanup."
         build_image
         push_image
         deploy_scanner_job
-        echo ""
-        echo "--> Full deployment initiated. Manual cleanup will be required."
-        echo "--> Run './deploy.sh cleanup' when scan is complete."
-        ;;
-    *)
-        echo "Error: Unknown action '$ACTION'."
-        echo "Usage: $0 [build|push|deploy|cleanup|full-deploy]"
-        exit 1
+        cleanup
         ;;
 esac
 
