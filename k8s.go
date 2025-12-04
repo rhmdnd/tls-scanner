@@ -16,13 +16,14 @@ import (
 	operatorclientset "github.com/openshift/client-go/operator/clientset/versioned"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func newK8sClient() (*K8sClient, error) {
@@ -60,6 +61,11 @@ func newK8sClient() (*K8sClient, error) {
 		return nil, fmt.Errorf("could not create openshift machineconfig client: %v", err)
 	}
 
+	dynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("could not create dynamic client: %v", err)
+	}
+
 	namespace := "default" // Or get from config
 	if nsBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/namespace"); err == nil {
 		namespace = string(nsBytes)
@@ -68,6 +74,7 @@ func newK8sClient() (*K8sClient, error) {
 	return &K8sClient{
 		clientset:                 clientset,
 		restCfg:                   config,
+		dynamicClient:             dynamicClient,
 		podIPMap:                  make(map[string]v1.Pod),
 		processNameMap:            make(map[string]map[int]string),
 		processDiscoveryAttempted: make(map[string]bool),
@@ -550,7 +557,7 @@ func (k *K8sClient) getAllPodsInfo() []PodInfo {
 		allPodsInfo = append(allPodsInfo, podInfo)
 	}
 	log.Printf("Found %d pods in the cluster (with IP addresses)", len(allPodsInfo))
-	
+
 	// Log summary of IP discovery
 	totalIPs := 0
 	uniqueIPs := make(map[string]bool)
@@ -561,7 +568,7 @@ func (k *K8sClient) getAllPodsInfo() []PodInfo {
 		}
 	}
 	log.Printf("IP discovery summary: %d total IPs across %d pods (%d unique IPs). Note: Multiple pods may share the same IP if using host networking mode.", totalIPs, len(allPodsInfo), len(uniqueIPs))
-	
+
 	return allPodsInfo
 }
 
@@ -605,7 +612,7 @@ func (k *K8sClient) executeInPod(namespace, podName, containerName string, comma
 
 func (k *K8sClient) getIngressController() (*unstructured.Unstructured, error) {
 	log.Println("Attempting to get IngressController custom resource...")
-	ingressController, err := k.clientset.DynamicClient().Resource(schema.GroupVersionResource{
+	ingressController, err := k.dynamicClient.Resource(schema.GroupVersionResource{
 		Group:    "operator.openshift.io",
 		Version:  "v1",
 		Resource: "ingresscontrollers",
@@ -620,7 +627,7 @@ func (k *K8sClient) getIngressController() (*unstructured.Unstructured, error) {
 
 func (k *K8sClient) getKubeletConfigWithTLSProfile() (*unstructured.Unstructured, error) {
 	log.Println("Searching for KubeletConfig with TLSSecurityProfile...")
-	list, err := k.clientset.DynamicClient().Resource(schema.GroupVersionResource{
+	list, err := k.dynamicClient.Resource(schema.GroupVersionResource{
 		Group:    "machineconfiguration.openshift.io",
 		Version:  "v1",
 		Resource: "kubeletconfigs",

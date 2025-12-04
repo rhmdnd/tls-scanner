@@ -8,6 +8,7 @@ import (
 	mcfgclientset "github.com/openshift/client-go/machineconfiguration/clientset/versioned"
 	operatorclientset "github.com/openshift/client-go/operator/clientset/versioned"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -168,6 +169,7 @@ type KubeletTLSProfile struct {
 type K8sClient struct {
 	clientset                 *kubernetes.Clientset
 	restCfg                   *rest.Config
+	dynamicClient             dynamic.Interface
 	podIPMap                  map[string]v1.Pod
 	processNameMap            map[string]map[int]string
 	processDiscoveryAttempted map[string]bool
