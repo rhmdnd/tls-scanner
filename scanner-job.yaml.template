@@ -14,16 +14,27 @@ spec:
         command: ["/bin/sh", "-c"]
         args:
           - |
-            # Run the scanner and capture its exit code
-            /usr/local/bin/tls-scanner --all-pods --json-file /artifacts/results.json --csv-file /artifacts/results.csv --log-file /artifacts/scan.log
+            # Run the scanner in the background and capture its exit code
+            /usr/local/bin/tls-scanner --all-pods --json-file /artifacts/results.json --csv-file /artifacts/results.csv --log-file /artifacts/scan.log ${NAMESPACE_FILTER_ARG} --limit-ips 10 &
+            SCANNER_PID=$!
+            
+            # Stream the log file in real-time to stdout (--retry waits for file creation)
+            tail -f --retry /artifacts/scan.log &
+            TAIL_PID=$!
+            
+            # Wait for the scanner to complete
+            wait $SCANNER_PID
             exit_code=$?
-
-            # Dump the log file to stdout for CI visibility, which is critical for debugging
-            echo "--- Start of scan.log ---"
-            cat /artifacts/scan.log
-            echo "--- End of scan.log ---"
-
+            
+            # Stop tailing and give it a moment to flush
+            kill $TAIL_PID 2>/dev/null || true
+            sleep 2
+            
+            # Dump any remaining log content to ensure nothing is missed
+            echo ""
+            echo "=========================================="
             echo "Scanner finished with exit code: $exit_code"
+            echo "=========================================="
             
             # Keep the container alive briefly to ensure logs are scraped
             echo "Pausing for log collection..."
