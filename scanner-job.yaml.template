@@ -35,6 +35,8 @@ spec:
             memory: 200Mi
           limits:
             memory: 1Gi
+        securityContext:
+          privileged: true
         volumeMounts:
         - name: artifacts
           mountPath: /artifacts
