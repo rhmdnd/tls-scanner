@@ -54,11 +54,17 @@ build_image() {
     check_error "Go build"
 
     echo "--> Building container image: ${SCANNER_IMAGE}"
+    DOCKERFILE="Dockerfile"
+    if [ "$LOCAL_MODE" = true ]; then
+        DOCKERFILE="Dockerfile.local"
+        echo "    Using local Dockerfile: ${DOCKERFILE}"
+    fi
+
     if command -v podman &> /dev/null; then
-        podman build -t ${SCANNER_IMAGE} .
+        podman build -t ${SCANNER_IMAGE} -f ${DOCKERFILE} .
         check_error "Podman build"
     elif command -v docker &> /dev/null; then
-        docker build -t ${SCANNER_IMAGE} .
+        docker build -t ${SCANNER_IMAGE} -f ${DOCKERFILE} .
         check_error "Docker build"
     fi
     echo "--> Image built: ${SCANNER_IMAGE}"
@@ -146,9 +152,16 @@ EOF
         echo "Error: Job template file not found: ${JOB_TEMPLATE}"
         exit 1
     fi
-    
+    echo "--> Deleting old Job '${JOB_NAME}' if it exists (to update immutable fields)..."
+    oc delete job "$JOB_NAME" -n "$NAMESPACE" --ignore-not-found=true
+
+    NAMESPACE_FILTER_ARG=""
+    if [ -n "$NAMESPACE_FILTER" ]; then
+        NAMESPACE_FILTER_ARG="--namespace-filter ${NAMESPACE_FILTER}"
+    fi
+
     # Substitute environment variables in the template and apply it
-    sed -e "s|\\\${SCANNER_IMAGE}|${SCANNER_IMAGE}|g" -e "s|\\\${NAMESPACE}|${NAMESPACE}|g" -e "s|\\\${JOB_NAME}|${JOB_NAME}|g" "$JOB_TEMPLATE" | oc apply -f -
+    sed -e "s|\\\${SCANNER_IMAGE}|${SCANNER_IMAGE}|g" -e "s|\\\${NAMESPACE}|${NAMESPACE}|g" -e "s|\\\${JOB_NAME}|${JOB_NAME}|g" -e "s|\\\${NAMESPACE_FILTER_ARG}|${NAMESPACE_FILTER_ARG}|g" "$JOB_TEMPLATE" | oc apply -f -
     check_error "Applying Job manifest"
 
     echo "--> Scanner Job '${JOB_NAME}' deployed."
@@ -265,6 +278,31 @@ cleanup() {
 }
 
 # --- Main Logic ---
+
+LOCAL_MODE=false
+NAMESPACE_FILTER=""
+POSITIONAL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --local)
+      LOCAL_MODE=true
+      shift # past argument
+      ;;
+    -n|--namespace-filter)
+      NAMESPACE_FILTER="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1") # save positional arg
+      shift # past argument
+      ;;
+  esac
+done
+
+set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
 ACTION=$1
 
 case "$ACTION" in
@@ -293,4 +331,3 @@ case "$ACTION" in
         cleanup
         ;;
 esac
-
