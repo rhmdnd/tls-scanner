@@ -241,7 +241,7 @@ EOF
     fi
 
     echo "--> To monitor logs, run: oc logs -f job/${JOB_NAME} -n ${NAMESPACE}"
-    echo "--> Waiting for scanner to finish... (timeout: 3h)"
+    echo "--> Waiting for scanner to finish... (timeout: 4h)"
 
     # Find the pod created by the job
     POD_NAME=$(oc get pods -n "${NAMESPACE}" -l job-name=${JOB_NAME} -o jsonpath='{.items[0].metadata.name}')
@@ -249,7 +249,7 @@ EOF
     # Monitor logs and wait for the scanner to finish (but NOT for the pod to complete)
     # The scanner prints "Scanner finished with exit code:" when done
     START_TIME=$(date +%s)
-    TIMEOUT=10800  # 3 hours in seconds
+    TIMEOUT=14400  # 4 hours in seconds (increased to accommodate large cluster scans)
     SCANNER_FINISHED=false
     
     while true; do
@@ -257,7 +257,7 @@ EOF
         ELAPSED=$((CURRENT_TIME - START_TIME))
         
         if [ $ELAPSED -gt $TIMEOUT ]; then
-            echo "Error: Scanner did not complete within 3h timeout."
+            echo "Error: Scanner did not complete within 4h timeout."
             exit 1
         fi
         
@@ -298,9 +298,9 @@ EOF
     fi
     
     # Now wait for the job to complete
-    echo "--> Waiting for job to complete... (timeout: 3h)"
-    if ! oc wait --for=condition=complete "job/${JOB_NAME}" -n "${NAMESPACE}" --timeout=3h; then
-        echo "Error: Job '${JOB_NAME}' did not complete within the 3h timeout."
+    echo "--> Waiting for job to complete... (timeout: 4h)"
+    if ! oc wait --for=condition=complete "job/${JOB_NAME}" -n "${NAMESPACE}" --timeout=4h; then
+        echo "Error: Job '${JOB_NAME}' did not complete within the 4h timeout."
         echo "--- Final job status ---"
         oc describe job "${JOB_NAME}" -n "${NAMESPACE}"
         exit 1

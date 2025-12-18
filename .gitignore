@@ -1,2 +1,10 @@
 bin/*
 tls-scanner
+
+# Test artifacts and results
+artifacts/
+tls-test-results/
+test-run.log
+test-tls13-run.log
+tls13-scan.log
+*-scan.log
