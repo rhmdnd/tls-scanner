@@ -22,6 +22,7 @@ SCANNER_IMAGE=${SCANNER_IMAGE:-"quay.io/user/tls-scanner:latest"}
 NAMESPACE=${NAMESPACE:-$(oc project -q)}
 JOB_TEMPLATE="scanner-job.yaml.template"
 JOB_NAME="tls-scanner-job"
+LIMIT_IPS="${LIMIT_IPS:-0}"  # Limit number of IPs to scan (0 = no limit, useful for testing)
 
 # TLS test configuration
 TLS_TEST_TIMEOUT=${TLS_TEST_TIMEOUT:-600}  # 10 minutes default, configurable
@@ -181,9 +182,15 @@ EOF
     if [ -n "$NAMESPACE_FILTER" ]; then
         NAMESPACE_FILTER_ARG="--namespace-filter ${NAMESPACE_FILTER}"
     fi
+    
+    LIMIT_IPS_ARG=""
+    if [ "$LIMIT_IPS" -gt 0 ] 2>/dev/null; then
+        LIMIT_IPS_ARG="--limit-ips ${LIMIT_IPS}"
+        echo "--> Limiting scan to first ${LIMIT_IPS} IPs (testing mode)"
+    fi
 
     # Substitute environment variables in the template and apply it
-    sed -e "s|\\\${SCANNER_IMAGE}|${SCANNER_IMAGE}|g" -e "s|\\\${NAMESPACE}|${NAMESPACE}|g" -e "s|\\\${JOB_NAME}|${JOB_NAME}|g" -e "s|\\\${NAMESPACE_FILTER_ARG}|${NAMESPACE_FILTER_ARG}|g" "$JOB_TEMPLATE" | oc apply -f -
+    sed -e "s|\\\${SCANNER_IMAGE}|${SCANNER_IMAGE}|g" -e "s|\\\${NAMESPACE}|${NAMESPACE}|g" -e "s|\\\${JOB_NAME}|${JOB_NAME}|g" -e "s|\\\${NAMESPACE_FILTER_ARG}|${NAMESPACE_FILTER_ARG}|g" -e "s|\\\${LIMIT_IPS_ARG}|${LIMIT_IPS_ARG}|g" "$JOB_TEMPLATE" | oc apply -f -
     check_error "Applying Job manifest"
 
     echo "--> Scanner Job '${JOB_NAME}' deployed."
@@ -711,6 +718,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     -n|--namespace-filter)
       NAMESPACE_FILTER="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    --limit-ips)
+      LIMIT_IPS="$2"
       shift # past argument
       shift # past value
       ;;
