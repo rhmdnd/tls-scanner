@@ -11,7 +11,7 @@ import (
 
 var csvColumns = []string{
 	"IP", "Port", "Protocol", "Service", "Pod Name", "Namespace", "Component Name", "Component Maintainer",
-	"Process", "TLS Ciphers", "TLS Version",
+	"Process", "TLS Ciphers", "TLS Version", "Status", "Reason", "Listen Address",
 	"Ingress Configured Profile", "Ingress Configured MinVersion", "Ingress MinVersion Compliance", "Ingress Configured Ciphers", "Ingress Cipher Compliance",
 	"API Configured Profile", "API Configured MinVersion", "API MinVersion Compliance", "API Configured Ciphers", "API Cipher Compliance",
 	"Kubelet Configured MinVersion", "Kubelet MinVersion Compliance", "Kubelet Configured Ciphers", "Kubelet Cipher Compliance",
@@ -104,6 +104,12 @@ func writeCSVOutput(results ScanResults, filename string) error {
 				componentMaintainer = ipResult.OpenshiftComponent.MaintainerComponent
 			}
 
+			// Determine status string - default to N/A if not set
+			statusStr := "N/A"
+			if portResult.Status != "" {
+				statusStr = string(portResult.Status)
+			}
+
 			rowData := map[string]string{
 				"IP":                            ipAddress,
 				"Port":                          port,
@@ -116,6 +122,9 @@ func writeCSVOutput(results ScanResults, filename string) error {
 				"Process":                       stringOrNA(portResult.ProcessName),
 				"TLS Ciphers":                   joinOrNA(portResult.TlsCiphers),
 				"TLS Version":                   joinOrNA(portResult.TlsVersions),
+				"Status":                        statusStr,
+				"Reason":                        stringOrNA(portResult.Reason),
+				"Listen Address":                stringOrNA(portResult.ListenAddress),
 				"Ingress Configured Profile":    ingressProfile,
 				"Ingress Configured MinVersion": ingressMinVersion,
 				"Ingress MinVersion Compliance": "N/A",

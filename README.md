@@ -65,6 +65,64 @@ kubectl cp "${NAMESPACE}/${POD_NAME}:/artifacts/." "./artifacts/"
 
 Your `./artifacts` directory will now contain `results.json`, `results.csv`, and `scan.log`.
 
+## Understanding Scan Results
+
+### CSV Output Columns
+
+The scanner produces a CSV file with detailed information about each scanned port. Key columns include:
+
+| Column | Description |
+|--------|-------------|
+| IP | Pod IP address that was scanned |
+| Port | TCP port number |
+| Protocol | Protocol (typically "tcp") |
+| Service | Detected service (e.g., "https", "http") |
+| Pod Name | Kubernetes pod name |
+| Namespace | Kubernetes namespace |
+| Component Name | OpenShift component name extracted from image |
+| Process | Process name listening on the port (from lsof) |
+| TLS Ciphers | Detected TLS cipher suites |
+| TLS Version | Detected TLS versions (e.g., TLSv1.2, TLSv1.3) |
+| **Status** | Categorized scan result (see below) |
+| **Reason** | Detailed explanation of the status |
+| **Listen Address** | Address the port is bound to (e.g., 127.0.0.1, *, 0.0.0.0) |
+
+### Status Categories
+
+The `Status` column categorizes why a port couldn't be scanned or its TLS configuration:
+
+| Status | Description |
+|--------|-------------|
+| `OK` | TLS scan successful - cipher and version information available |
+| `NO_TLS` | Port is open but not using TLS (plain HTTP/TCP service) |
+| `LOCALHOST_ONLY` | Port is bound to 127.0.0.1, not accessible from pod IP |
+| `FILTERED` | Port blocked by network policy or firewall |
+| `CLOSED` | Port not listening on the scanned IP address |
+| `MTLS_REQUIRED` | TLS handshake failed - likely requires client certificate |
+| `TIMEOUT` | Connection timed out |
+| `NO_PORTS` | Pod declares no TCP ports in its spec |
+| `ERROR` | Scan error occurred (see Reason for details) |
+
+### Example Output
+
+```csv
+IP,Port,Protocol,Service,Pod Name,Namespace,...,Status,Reason,Listen Address
+10.128.0.15,8443,tcp,https,kube-apiserver-pod,openshift-kube-apiserver,...,OK,TLS scan successful,*
+10.0.53.147,9257,tcp,N/A,controller-manager-pod,openshift-cloud-controller,...,LOCALHOST_ONLY,Bound to 127.0.0.1 not accessible from pod IP,127.0.0.1
+10.0.87.193,10258,tcp,N/A,aws-ccm-pod,openshift-cloud-controller,...,FILTERED,Network policy or firewall blocking access,N/A
+10.128.0.20,8080,tcp,http,metrics-pod,openshift-monitoring,...,NO_TLS,Port open but no TLS detected (plain HTTP/TCP),*
+```
+
+### Interpreting Results
+
+1. **LOCALHOST_ONLY ports**: These are internal-only ports bound to 127.0.0.1. They're only accessible from within the pod itself and don't pose external TLS compliance concerns. Common for metrics endpoints that are scraped via sidecar containers.
+
+2. **FILTERED ports**: The scanner couldn't reach these ports due to network policies, firewall rules, or the service not listening on the pod IP. Review network policies if you need to scan these.
+
+3. **NO_TLS ports**: These ports are open but don't use TLS. This may be expected (e.g., health check endpoints, plaintext metrics) or may indicate a security concern depending on the data transmitted.
+
+4. **MTLS_REQUIRED ports**: Common for etcd (ports 2379/2380) and other services requiring mutual TLS. The scanner can't complete the handshake without a client certificate.
+
 #### 5. Cleanup
 
 Remove the scanner Job and associated RBAC permissions from the cluster.

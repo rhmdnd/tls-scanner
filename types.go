@@ -110,6 +110,30 @@ type PodInfo struct {
 	Pod        *v1.Pod  `json:"-"` // The actual pod object
 }
 
+// ScanStatus represents the categorized result of scanning a port
+type ScanStatus string
+
+const (
+	// StatusOK indicates TLS scan was successful
+	StatusOK ScanStatus = "OK"
+	// StatusNoTLS indicates port is open but not using TLS (plain HTTP/TCP)
+	StatusNoTLS ScanStatus = "NO_TLS"
+	// StatusLocalhostOnly indicates port is bound to 127.0.0.1, not network-accessible
+	StatusLocalhostOnly ScanStatus = "LOCALHOST_ONLY"
+	// StatusFiltered indicates port is blocked by network policy/firewall
+	StatusFiltered ScanStatus = "FILTERED"
+	// StatusClosed indicates port is not listening on the scanned IP
+	StatusClosed ScanStatus = "CLOSED"
+	// StatusMTLSRequired indicates TLS handshake rejected (likely needs client cert)
+	StatusMTLSRequired ScanStatus = "MTLS_REQUIRED"
+	// StatusTimeout indicates connection timed out
+	StatusTimeout ScanStatus = "TIMEOUT"
+	// StatusError indicates a scan error occurred
+	StatusError ScanStatus = "ERROR"
+	// StatusNoPorts indicates pod declares no TCP ports
+	StatusNoPorts ScanStatus = "NO_PORTS"
+)
+
 type PortResult struct {
 	Port                         int                        `json:"port"`
 	Protocol                     string                     `json:"protocol"`
@@ -122,6 +146,9 @@ type PortResult struct {
 	TlsCiphers                   []string                   `json:"tls_ciphers,omitempty"`
 	TlsCipherStrength            map[string]string          `json:"tls_cipher_strength,omitempty"`
 	Error                        string                     `json:"error,omitempty"`
+	Status                       ScanStatus                 `json:"status"`
+	Reason                       string                     `json:"reason,omitempty"`
+	ListenAddress                string                     `json:"listen_address,omitempty"`
 	IngressTLSConfigCompliance   *TLSConfigComplianceResult `json:"ingress_tls_config_compliance,omitempty"`
 	APIServerTLSConfigCompliance *TLSConfigComplianceResult `json:"api_server_tls_config_compliance,omitempty"`
 	KubeletTLSConfigCompliance   *TLSConfigComplianceResult `json:"kubelet_tls_config_compliance,omitempty"`
@@ -166,12 +193,20 @@ type KubeletTLSProfile struct {
 	Raw             string   `json:"raw,omitempty"`
 }
 
+// ListenInfo contains information about a listening port from lsof
+type ListenInfo struct {
+	Port          int
+	ListenAddress string // e.g., "127.0.0.1", "*", "0.0.0.0", or specific IP
+	ProcessName   string
+}
+
 type K8sClient struct {
 	clientset                 *kubernetes.Clientset
 	restCfg                   *rest.Config
 	dynamicClient             dynamic.Interface
 	podIPMap                  map[string]v1.Pod
 	processNameMap            map[string]map[int]string
+	listenInfoMap             map[string]map[int]ListenInfo // IP -> port -> ListenInfo
 	processDiscoveryAttempted map[string]bool
 	processCacheMutex         sync.Mutex
 	namespace                 string

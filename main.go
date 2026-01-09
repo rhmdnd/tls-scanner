@@ -717,7 +717,17 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 			Pod:       &pod,
 			Status:    "scanned",
 			OpenPorts: []int{},
+			PortResults: []PortResult{{
+				Port:   0,
+				Status: StatusNoPorts,
+				Reason: "Pod declares no TCP ports in spec",
+			}},
 		}
+	}
+
+	// Run lsof BEFORE scanning to get listen address information
+	if k8sClient != nil && len(pod.Containers) > 0 {
+		k8sClient.getAndCachePodProcesses(pod)
 	}
 
 	ipResult := IPResult{
@@ -728,9 +738,52 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 		PortResults: make([]PortResult, 0, len(openPorts)),
 	}
 
+	// Check for localhost-only ports and filter them out before nmap scan
+	var portsToScan []int
+	localhostOnlyPorts := make(map[int]string) // port -> listen address
+
+	for _, port := range openPorts {
+		if k8sClient != nil {
+			if isLocalhost, listenAddr := k8sClient.isLocalhostOnly(ip, port); isLocalhost {
+				localhostOnlyPorts[port] = listenAddr
+				log.Printf("Port %d on %s is bound to localhost only (%s), skipping network scan", port, ip, listenAddr)
+				continue
+			}
+		}
+		portsToScan = append(portsToScan, port)
+	}
+
+	// Add localhost-only ports to results immediately
+	for port, listenAddr := range localhostOnlyPorts {
+		portResult := PortResult{
+			Port:          port,
+			Protocol:      "tcp",
+			State:         "localhost",
+			Status:        StatusLocalhostOnly,
+			Reason:        fmt.Sprintf("Bound to %s, not accessible from pod IP", listenAddr),
+			ListenAddress: listenAddr,
+		}
+		// Get process name if available
+		if k8sClient != nil {
+			k8sClient.processCacheMutex.Lock()
+			if processName, ok := k8sClient.processNameMap[ip][port]; ok {
+				portResult.ProcessName = processName
+				portResult.ContainerName = strings.Join(pod.Containers, ",")
+			}
+			k8sClient.processCacheMutex.Unlock()
+		}
+		ipResult.PortResults = append(ipResult.PortResults, portResult)
+	}
+
+	// If no ports to scan via network, return early
+	if len(portsToScan) == 0 {
+		log.Printf("All ports for %s are localhost-only, no network scan needed", ip)
+		return ipResult
+	}
+
 	// Convert port numbers to a comma-separated string for nmap
-	portStrings := make([]string, len(openPorts))
-	for i, p := range openPorts {
+	portStrings := make([]string, len(portsToScan))
+	for i, p := range portsToScan {
 		portStrings[i] = strconv.Itoa(p)
 	}
 	portSpec := strings.Join(portStrings, ",")
@@ -743,8 +796,13 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 	if err != nil {
 		ipResult.Error = fmt.Sprintf("nmap scan failed: %v", err)
 		// Still create PortResult entries for CSV consistency
-		for _, port := range openPorts {
-			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, Error: "nmap scan failed"})
+		for _, port := range portsToScan {
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{
+				Port:   port,
+				Error:  "nmap scan failed",
+				Status: StatusError,
+				Reason: fmt.Sprintf("nmap scan failed: %v", err),
+			})
 		}
 		return ipResult
 	}
@@ -752,8 +810,13 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 	var nmapResult NmapRun
 	if err := xml.Unmarshal(output, &nmapResult); err != nil {
 		ipResult.Error = fmt.Sprintf("failed to parse nmap XML: %v", err)
-		for _, port := range openPorts {
-			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, Error: "nmap xml parse failed"})
+		for _, port := range portsToScan {
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{
+				Port:   port,
+				Error:  "nmap xml parse failed",
+				Status: StatusError,
+				Reason: "Failed to parse nmap XML output",
+			})
 		}
 		return ipResult
 	}
@@ -771,12 +834,16 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 				NmapRun:  NmapRun{Hosts: []Host{{Ports: []Port{nmapPort}}}},
 			}
 			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.NmapRun)
+
+			// Set status and reason based on nmap results
+			portResult.Status, portResult.Reason = categorizePortResult(portResult, nmapPort)
+
 			resultsByPort[nmapPort.PortID] = portResult
 		}
 	}
 
 	// Correlate results with discovered ports
-	for _, port := range openPorts {
+	for _, port := range portsToScan {
 		if portResult, ok := resultsByPort[strconv.Itoa(port)]; ok {
 			// Log port state for debugging
 			if portResult.State == "filtered" {
@@ -791,7 +858,6 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 				checkCompliance(&portResult, tlsSecurityProfile)
 
 				if k8sClient != nil && len(pod.Containers) > 0 {
-					k8sClient.getAndCachePodProcesses(pod)
 					k8sClient.processCacheMutex.Lock()
 					if processName, ok := k8sClient.processNameMap[ip][port]; ok {
 						portResult.ProcessName = processName
@@ -803,15 +869,65 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 			} else {
 				log.Printf("No TLS information found for port %d on %s (state: %s). This port may not be listening, may be blocked by network policies, or may not be a TLS service.", port, ip, portResult.State)
 			}
+
+			// Get listen address info if available
+			if k8sClient != nil {
+				if info, ok := k8sClient.getListenInfo(ip, port); ok {
+					portResult.ListenAddress = info.ListenAddress
+				}
+			}
+
 			ipResult.PortResults = append(ipResult.PortResults, portResult)
 		} else {
 			// Port was discovered but not in the ssl-enum-ciphers result (e.g., not an SSL port)
 			log.Printf("Port %d on %s was declared in pod spec but not found in nmap results. Assuming non-TLS service.", port, ip)
-			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, State: "open"})
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{
+				Port:   port,
+				State:  "open",
+				Status: StatusNoTLS,
+				Reason: "Port open but no TLS detected (plain HTTP/TCP)",
+			})
 		}
 	}
 
 	return ipResult
+}
+
+// categorizePortResult determines the Status and Reason based on nmap results
+func categorizePortResult(portResult PortResult, nmapPort Port) (ScanStatus, string) {
+	// Check if TLS was successfully detected
+	if len(portResult.TlsCiphers) > 0 {
+		return StatusOK, "TLS scan successful"
+	}
+
+	// Categorize based on port state
+	switch portResult.State {
+	case "filtered":
+		return StatusFiltered, "Network policy or firewall blocking access"
+	case "closed":
+		return StatusClosed, "Port not listening on this IP"
+	case "open":
+		// Port is open but no TLS - check for specific error patterns
+		// Check if it might be mTLS required (handshake failure patterns)
+		for _, script := range nmapPort.Scripts {
+			if script.ID == "ssl-enum-ciphers" {
+				for _, elem := range script.Elems {
+					if strings.Contains(strings.ToLower(elem.Value), "handshake") ||
+						strings.Contains(strings.ToLower(elem.Value), "certificate") {
+						return StatusMTLSRequired, "TLS handshake failed - may require client certificate"
+					}
+				}
+			}
+		}
+		// Check for timeout patterns
+		if nmapPort.State.Reason == "no-response" {
+			return StatusTimeout, "Connection timed out"
+		}
+		// Default: port is open but not using TLS
+		return StatusNoTLS, "Port open but no TLS detected (plain HTTP/TCP)"
+	default:
+		return StatusError, fmt.Sprintf("Unknown port state: %s", portResult.State)
+	}
 }
 
 // limitPodsToIPCount limits the pod list to contain at most maxIPs total IP addresses
@@ -941,7 +1057,12 @@ func scanHostPorts(host string, ports []string) IPResult {
 		ipResult.Error = fmt.Sprintf("nmap scan failed: %v", err)
 		for _, portStr := range ports {
 			port, _ := strconv.Atoi(portStr)
-			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, Error: "nmap scan failed"})
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{
+				Port:   port,
+				Error:  "nmap scan failed",
+				Status: StatusError,
+				Reason: fmt.Sprintf("nmap scan failed: %v", err),
+			})
 		}
 		return ipResult
 	}
@@ -951,7 +1072,12 @@ func scanHostPorts(host string, ports []string) IPResult {
 		ipResult.Error = fmt.Sprintf("failed to parse nmap XML: %v", err)
 		for _, portStr := range ports {
 			port, _ := strconv.Atoi(portStr)
-			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, Error: "nmap xml parse failed"})
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{
+				Port:   port,
+				Error:  "nmap xml parse failed",
+				Status: StatusError,
+				Reason: "Failed to parse nmap XML output",
+			})
 		}
 		return ipResult
 	}
@@ -968,6 +1094,8 @@ func scanHostPorts(host string, ports []string) IPResult {
 				NmapRun:  NmapRun{Hosts: []Host{{Ports: []Port{nmapPort}}}},
 			}
 			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.NmapRun)
+			// Set status and reason based on nmap results
+			portResult.Status, portResult.Reason = categorizePortResult(portResult, nmapPort)
 			resultsByPort[nmapPort.PortID] = portResult
 		}
 	}
@@ -978,7 +1106,12 @@ func scanHostPorts(host string, ports []string) IPResult {
 			ipResult.PortResults = append(ipResult.PortResults, portResult)
 		} else {
 			// Port was specified but not in the result (e.g., not an SSL port or closed)
-			ipResult.PortResults = append(ipResult.PortResults, PortResult{Port: port, State: "closed/filtered"})
+			ipResult.PortResults = append(ipResult.PortResults, PortResult{
+				Port:   port,
+				State:  "closed/filtered",
+				Status: StatusClosed,
+				Reason: "Port not responding or filtered",
+			})
 		}
 	}
 

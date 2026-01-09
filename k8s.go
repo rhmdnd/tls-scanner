@@ -77,6 +77,7 @@ func newK8sClient() (*K8sClient, error) {
 		dynamicClient:             dynamicClient,
 		podIPMap:                  make(map[string]v1.Pod),
 		processNameMap:            make(map[string]map[int]string),
+		listenInfoMap:             make(map[string]map[int]ListenInfo),
 		processDiscoveryAttempted: make(map[string]bool),
 		namespace:                 namespace,
 		configClient:              configClient,
@@ -255,10 +256,12 @@ func max(a, b int) int {
 }
 
 // getProcessMapForPod executes a single lsof command to get all listening ports and processes for a pod
-func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string, error) {
+// Returns both the process map and listen info map with listen addresses
+func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string, map[string]map[int]ListenInfo, error) {
 	processMap := make(map[string]map[int]string)
+	listenInfoMap := make(map[string]map[int]ListenInfo)
 	if len(pod.Containers) == 0 {
-		return processMap, nil
+		return processMap, listenInfoMap, nil
 	}
 
 	// lsof command to get port and command name for all listening TCP ports
@@ -285,7 +288,7 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 
 	exec, err := remotecommand.NewSPDYExecutor(k.restCfg, "POST", req.URL())
 	if err != nil {
-		return nil, fmt.Errorf("failed to create executor for pod %s: %v", pod.Name, err)
+		return nil, nil, fmt.Errorf("failed to create executor for pod %s: %v", pod.Name, err)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -300,7 +303,7 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 	log.Printf("lsof stderr:\n%s", stderr.String())
 
 	if err != nil {
-		return nil, fmt.Errorf("exec failed on pod %s: %v, stdout: %s, stderr: %s", pod.Name, err, stdout.String(), stderr.String())
+		return nil, nil, fmt.Errorf("exec failed on pod %s: %v, stdout: %s, stderr: %s", pod.Name, err, stdout.String(), stderr.String())
 	}
 
 	if stdout.Len() == 0 {
@@ -321,9 +324,10 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 			case 'c':
 				currentProcess = fieldValue
 			case 'n':
-				// Format is expected to be something like *:port or IP:port
+				// Format is expected to be something like *:port, 127.0.0.1:port, or IP:port
 				parts := strings.Split(fieldValue, ":")
 				if len(parts) == 2 {
+					listenAddr := parts[0]
 					portStr := parts[1]
 					port, err := strconv.Atoi(portStr)
 					if err == nil {
@@ -332,8 +336,16 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 							if _, ok := processMap[ip]; !ok {
 								processMap[ip] = make(map[int]string)
 							}
+							if _, ok := listenInfoMap[ip]; !ok {
+								listenInfoMap[ip] = make(map[int]ListenInfo)
+							}
 							processMap[ip][port] = currentProcess
-							log.Printf("Mapped pod %s/%s IP %s port %d to process %s", pod.Namespace, pod.Name, ip, port, currentProcess)
+							listenInfoMap[ip][port] = ListenInfo{
+								Port:          port,
+								ListenAddress: listenAddr,
+								ProcessName:   currentProcess,
+							}
+							log.Printf("Mapped pod %s/%s IP %s port %d to process %s (listen addr: %s)", pod.Namespace, pod.Name, ip, port, currentProcess, listenAddr)
 						}
 					} else {
 						log.Printf("Error converting port to integer for pod %s/%s: '%s' from line '%s'", pod.Namespace, pod.Name, portStr, line)
@@ -345,7 +357,7 @@ func (k *K8sClient) getProcessMapForPod(pod PodInfo) (map[string]map[int]string,
 		}
 	}
 
-	return processMap, nil
+	return processMap, listenInfoMap, nil
 }
 
 func (k *K8sClient) getAndCachePodProcesses(pod PodInfo) {
@@ -358,13 +370,13 @@ func (k *K8sClient) getAndCachePodProcesses(pod PodInfo) {
 	k.processDiscoveryAttempted[pod.Name] = true
 	k.processCacheMutex.Unlock()
 
-	processMap, err := k.getProcessMapForPod(pod)
+	processMap, listenInfoMap, err := k.getProcessMapForPod(pod)
 	if err != nil {
 		log.Printf("Could not get process map for pod %s/%s: %v", pod.Namespace, pod.Name, err)
 		return
 	}
 
-	if len(processMap) > 0 {
+	if len(processMap) > 0 || len(listenInfoMap) > 0 {
 		k.processCacheMutex.Lock()
 		defer k.processCacheMutex.Unlock()
 		for ip, portMap := range processMap {
@@ -375,7 +387,43 @@ func (k *K8sClient) getAndCachePodProcesses(pod PodInfo) {
 				k.processNameMap[ip][port] = process
 			}
 		}
+		for ip, portMap := range listenInfoMap {
+			if _, ok := k.listenInfoMap[ip]; !ok {
+				k.listenInfoMap[ip] = make(map[int]ListenInfo)
+			}
+			for port, info := range portMap {
+				k.listenInfoMap[ip][port] = info
+			}
+		}
 	}
+}
+
+// isLocalhostOnly checks if a port is bound to localhost only (127.0.0.1)
+func (k *K8sClient) isLocalhostOnly(ip string, port int) (bool, string) {
+	k.processCacheMutex.Lock()
+	defer k.processCacheMutex.Unlock()
+
+	if portMap, ok := k.listenInfoMap[ip]; ok {
+		if info, ok := portMap[port]; ok {
+			if info.ListenAddress == "127.0.0.1" || info.ListenAddress == "localhost" {
+				return true, info.ListenAddress
+			}
+		}
+	}
+	return false, ""
+}
+
+// getListenInfo retrieves the listen info for a specific IP and port
+func (k *K8sClient) getListenInfo(ip string, port int) (ListenInfo, bool) {
+	k.processCacheMutex.Lock()
+	defer k.processCacheMutex.Unlock()
+
+	if portMap, ok := k.listenInfoMap[ip]; ok {
+		if info, ok := portMap[port]; ok {
+			return info, true
+		}
+	}
+	return ListenInfo{}, false
 }
 
 // getTLSSecurityProfile collects TLS security profile configurations from OpenShift components
