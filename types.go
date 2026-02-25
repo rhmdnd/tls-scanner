@@ -13,8 +13,11 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-type NmapRun struct {
-	XMLName xml.Name `xml:"nmaprun" json:"-"`
+// ScanRun and related types below are parse-only types used to unmarshal nmap
+// XML output. Other scanning implementations do not need to use this if they
+// can map the appropriate information into IPResult and PortResult directly.
+type ScanRun struct {
+	XMLName xml.Name `xml:"scanrun" json:"-"`
 	Hosts   []Host   `xml:"host" json:"hosts"`
 }
 
@@ -141,7 +144,6 @@ type PortResult struct {
 	Service                      string                     `json:"service"`
 	ProcessName                  string                     `json:"process_name,omitempty"`
 	ContainerName                string                     `json:"container_name,omitempty"`
-	NmapRun                      NmapRun                    `json:"nmap_details"` // deprecated
 	TlsVersions                  []string                   `json:"tls_versions,omitempty"`
 	TlsCiphers                   []string                   `json:"tls_ciphers,omitempty"`
 	TlsCipherStrength            map[string]string          `json:"tls_cipher_strength,omitempty"`
@@ -233,9 +235,8 @@ var tlsVersionValueMap = map[string]int{
 	"VersionTLS13": 13,
 }
 
-// TODO fix this. The mapping from nmap to tls config is not very clear.
-// nmapCipherToStandardCipherMap maps the cipher names from nmap's ssl-enum-ciphers script
-// to the standard cipher suite names used in OpenShift TLS security profiles.
+// ianaCipherToOpenSSLCipherMap maps IANA cipher names from TLS scans
+// to the OpenSSL cipher suite names used in OpenShift TLS security profiles.
 var ianaCipherToOpenSSLCipherMap = map[string]string{
 	// Intermediate ciphers
 	"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256":       "TLS_AES_128_GCM_SHA256",

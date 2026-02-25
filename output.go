@@ -63,16 +63,17 @@ func printClusterResults(results ScanResults) {
 				fmt.Printf("    Process Name: %s (%s)\n", portResult.ProcessName, portResult.ContainerName)
 			}
 
-			// Print SSL cipher information if available
-			if len(portResult.NmapRun.Hosts) > 0 {
-				for _, host := range portResult.NmapRun.Hosts {
-					for _, port := range host.Ports {
-						for _, script := range port.Scripts {
-							if script.ID == "ssl-enum-ciphers" {
-								fmt.Printf("    SSL Ciphers:\n")
-								printTableWithIndent(script.Tables, 3)
-							}
-						}
+			if len(portResult.TlsVersions) > 0 {
+				fmt.Printf("    TLS Versions: %s\n", strings.Join(portResult.TlsVersions, ", "))
+			}
+			if len(portResult.TlsCiphers) > 0 {
+				fmt.Printf("    Ciphers:\n")
+				for _, cipher := range portResult.TlsCiphers {
+					strength := portResult.TlsCipherStrength[cipher]
+					if strength != "" {
+						fmt.Printf("      %s - %s\n", cipher, strength)
+					} else {
+						fmt.Printf("      %s\n", cipher)
 					}
 				}
 			}
@@ -81,102 +82,34 @@ func printClusterResults(results ScanResults) {
 	}
 }
 
-func printParsedResults(run NmapRun) {
-	if len(run.Hosts) == 0 {
+func printParsedResults(results ScanResults) {
+	if len(results.IPResults) == 0 {
 		log.Println("No hosts were scanned or host is down.")
 		return
 	}
 
-	for _, host := range run.Hosts {
-		if host.Status.State != "up" {
-			log.Printf("Host %s is %s.\n", os.Args[len(os.Args)-1], host.Status.State)
-			continue
-		}
-		for _, port := range host.Ports {
+	for _, ipResult := range results.IPResults {
+		for _, portResult := range ipResult.PortResults {
 			fmt.Printf("PORT    STATE SERVICE REASON\n")
-			fmt.Printf("%s/%s %-5s %-7s %s\n", port.PortID, port.Protocol, port.State.State, port.Service.Name, port.State.Reason)
+			fmt.Printf("%d/%s %-5s %-7s %s\n", portResult.Port, portResult.Protocol, portResult.State, portResult.Service, portResult.Reason)
 
-			for _, script := range port.Scripts {
-				if script.ID == "ssl-enum-ciphers" {
-					fmt.Println("| ssl-enum-ciphers:")
-					printTable(script.Tables, 1)
-					for _, elem := range script.Elems {
-						fmt.Printf("|_  %s: %s\n", elem.Key, elem.Value)
+			if len(portResult.TlsVersions) > 0 || len(portResult.TlsCiphers) > 0 {
+				fmt.Println("| ssl-enum-ciphers:")
+				for _, version := range portResult.TlsVersions {
+					fmt.Printf("|   %s:\n", version)
+				}
+				if len(portResult.TlsCiphers) > 0 {
+					fmt.Printf("|   ciphers:\n")
+					for _, cipher := range portResult.TlsCiphers {
+						strength := portResult.TlsCipherStrength[cipher]
+						if strength != "" {
+							fmt.Printf("|     %s - %s\n", cipher, strength)
+						} else {
+							fmt.Printf("|     %s\n", cipher)
+						}
 					}
 				}
 			}
-		}
-	}
-}
-
-func printTable(tables []Table, indentLevel int) {
-	indent := strings.Repeat("  ", indentLevel)
-	for _, table := range tables {
-		fmt.Printf("|%s %s:\n", indent, table.Key)
-
-		if table.Key == "ciphers" {
-			for _, cipherTable := range table.Tables {
-				var name, kex, strength string
-				for _, elem := range cipherTable.Elems {
-					switch elem.Key {
-					case "name":
-						name = elem.Value
-					case "kex_info":
-						kex = elem.Value
-					case "strength":
-						strength = elem.Value
-					}
-				}
-				fmt.Printf("|%s   %s (%s) - %s\n", indent, name, kex, strength)
-			}
-		} else {
-			for _, elem := range table.Elems {
-				if elem.Key != "" {
-					fmt.Printf("|%s   %s: %s\n", indent, elem.Key, elem.Value)
-				} else {
-					fmt.Printf("|%s   - %s\n", indent, elem.Value)
-				}
-			}
-		}
-
-		if len(table.Tables) > 0 && table.Key != "ciphers" {
-			printTable(table.Tables, indentLevel+1)
-		}
-	}
-}
-
-func printTableWithIndent(tables []Table, indentLevel int) {
-	indent := strings.Repeat("  ", indentLevel)
-	for _, table := range tables {
-		fmt.Printf("%s%s:\n", indent, table.Key)
-
-		if table.Key == "ciphers" {
-			for _, cipherTable := range table.Tables {
-				var name, kex, strength string
-				for _, elem := range cipherTable.Elems {
-					switch elem.Key {
-					case "name":
-						name = elem.Value
-					case "kex_info":
-						kex = elem.Value
-					case "strength":
-						strength = elem.Value
-					}
-				}
-				fmt.Printf("%s  %s (%s) - %s\n", indent, name, kex, strength)
-			}
-		} else {
-			for _, elem := range table.Elems {
-				if elem.Key != "" {
-					fmt.Printf("%s  %s: %s\n", indent, elem.Key, elem.Value)
-				} else {
-					fmt.Printf("%s  - %s\n", indent, elem.Value)
-				}
-			}
-		}
-
-		if len(table.Tables) > 0 && table.Key != "ciphers" {
-			printTableWithIndent(table.Tables, indentLevel+1)
 		}
 	}
 }
