@@ -300,8 +300,8 @@ func main() {
 		log.Fatalf("Error executing Nmap command. Nmap output:\n%s", string(output))
 	}
 
-	var nmapResult NmapRun
-	if err := xml.Unmarshal(output, &nmapResult); err != nil {
+	var scanResult ScanRun
+	if err := xml.Unmarshal(output, &scanResult); err != nil {
 		log.Fatalf("Error parsing Nmap XML output: %v", err)
 	}
 
@@ -324,24 +324,24 @@ func main() {
 		IPResults: []IPResult{{
 			IP:          *host,
 			Status:      "scanned",
-			OpenPorts:   []int{}, // Will be extracted from nmapResult
+			OpenPorts:   []int{},
 			PortResults: []PortResult{},
 		}},
 	}
 
-	// Extract port information from nmap result
-	if len(nmapResult.Hosts) > 0 && len(nmapResult.Hosts[0].Ports) > 0 {
-		for _, nmapPort := range nmapResult.Hosts[0].Ports {
-			if port, err := strconv.Atoi(nmapPort.PortID); err == nil {
+	// Extract port information from scan result
+	if len(scanResult.Hosts) > 0 && len(scanResult.Hosts[0].Ports) > 0 {
+		for _, tlsPort := range scanResult.Hosts[0].Ports {
+			if port, err := strconv.Atoi(tlsPort.PortID); err == nil {
 				singleResult.IPResults[0].OpenPorts = append(singleResult.IPResults[0].OpenPorts, port)
 				portResult := PortResult{
-					Port:     port,
-					Protocol: nmapPort.Protocol,
-					State:    nmapPort.State.State,
-					Service:  nmapPort.Service.Name,
-					NmapRun:  nmapResult,
+					Port:       port,
+					Protocol:   tlsPort.Protocol,
+					State:      tlsPort.State.State,
+					Service:    tlsPort.Service.Name,
+					ScanRun: scanResult,
 				}
-				portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.NmapRun)
+				portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.ScanRun)
 
 				// Check compliance if TLS config is available
 				if tlsConfig != nil && len(portResult.TlsCiphers) > 0 {
@@ -358,7 +358,7 @@ func main() {
 		if !filepath.IsAbs(jsonPath) {
 			jsonPath = filepath.Join(*artifactDir, *jsonFile)
 		}
-		if err := writeJSONOutput(nmapResult, jsonPath); err != nil {
+		if err := writeJSONOutput(scanResult, jsonPath); err != nil {
 			log.Fatalf("Error writing JSON output: %v", err)
 		}
 		log.Printf("JSON results written to %s", jsonPath)
@@ -387,7 +387,7 @@ func main() {
 	}
 
 	if *jsonFile == "" && *csvFile == "" {
-		printParsedResults(nmapResult)
+		printParsedResults(scanResult)
 	}
 
 	finalScanResults = &singleResult
@@ -603,16 +603,16 @@ func stringInSlice(s string, list []string) bool {
 	return false
 }
 
-func extractTLSInfo(nmapRun NmapRun) (versions []string, ciphers []string, cipherStrength map[string]string) {
+func extractTLSInfo(scanRun ScanRun) (versions []string, ciphers []string, cipherStrength map[string]string) {
 	// Collect all detected ciphers and TLS versions for this port
 	var allDetectedCiphers []string
 	var tlsVersions []string
 	cipherStrength = make(map[string]string) // TODO currently unused. Might be useful
 
-	// Extract TLS versions and ciphers from nmap script results
-	for _, host := range nmapRun.Hosts {
-		for _, nmapPort := range host.Ports {
-			for _, script := range nmapPort.Scripts {
+	// Extract TLS versions and ciphers from scan results
+	for _, host := range scanRun.Hosts {
+		for _, tlsPort := range host.Ports {
+			for _, script := range tlsPort.Scripts {
 				if script.ID == "ssl-enum-ciphers" {
 					for _, table := range script.Tables {
 						tlsVersion := table.Key
@@ -856,38 +856,38 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 		return ipResult
 	}
 
-	var nmapResult NmapRun
-	if err := xml.Unmarshal(output, &nmapResult); err != nil {
-		ipResult.Error = fmt.Sprintf("failed to parse nmap XML: %v", err)
+	var scanResult ScanRun
+	if err := xml.Unmarshal(output, &scanResult); err != nil {
+		ipResult.Error = fmt.Sprintf("failed to parse scan XML: %v", err)
 		for _, port := range portsToScan {
 			ipResult.PortResults = append(ipResult.PortResults, PortResult{
 				Port:   port,
-				Error:  "nmap xml parse failed",
+				Error:  "scan xml parse failed",
 				Status: StatusError,
-				Reason: "Failed to parse nmap XML output",
+				Reason: "Failed to parse scan XML output",
 			})
 		}
 		return ipResult
 	}
 
-	// Create a map of port results from the single nmap run
+	// Create a map of port results from the scan run
 	resultsByPort := make(map[string]PortResult)
-	if len(nmapResult.Hosts) > 0 {
-		for _, nmapPort := range nmapResult.Hosts[0].Ports {
-			portNum, _ := strconv.Atoi(nmapPort.PortID)
+	if len(scanResult.Hosts) > 0 {
+		for _, tlsPort := range scanResult.Hosts[0].Ports {
+			portNum, _ := strconv.Atoi(tlsPort.PortID)
 			portResult := PortResult{
-				Port:     portNum,
-				Protocol: nmapPort.Protocol,
-				State:    nmapPort.State.State,
-				Service:  nmapPort.Service.Name,
-				NmapRun:  NmapRun{Hosts: []Host{{Ports: []Port{nmapPort}}}},
+				Port:       portNum,
+				Protocol:   tlsPort.Protocol,
+				State:      tlsPort.State.State,
+				Service:    tlsPort.Service.Name,
+				ScanRun: ScanRun{Hosts: []Host{{Ports: []Port{tlsPort}}}},
 			}
-			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.NmapRun)
+			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.ScanRun)
 
-			// Set status and reason based on nmap results
-			portResult.Status, portResult.Reason = categorizePortResult(portResult, nmapPort)
+			// Set status and reason based on scan results
+			portResult.Status, portResult.Reason = categorizePortResult(portResult, tlsPort)
 
-			resultsByPort[nmapPort.PortID] = portResult
+			resultsByPort[tlsPort.PortID] = portResult
 		}
 	}
 
@@ -942,8 +942,8 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 	return ipResult
 }
 
-// categorizePortResult determines the Status and Reason based on nmap results
-func categorizePortResult(portResult PortResult, nmapPort Port) (ScanStatus, string) {
+// categorizePortResult determines the Status and Reason based on scan results
+func categorizePortResult(portResult PortResult, tlsPort Port) (ScanStatus, string) {
 	// Check if TLS was successfully detected
 	if len(portResult.TlsCiphers) > 0 {
 		return StatusOK, "TLS scan successful"
@@ -958,7 +958,7 @@ func categorizePortResult(portResult PortResult, nmapPort Port) (ScanStatus, str
 	case "open":
 		// Port is open but no TLS - check for specific error patterns
 		// Check if it might be mTLS required (handshake failure patterns)
-		for _, script := range nmapPort.Scripts {
+		for _, script := range tlsPort.Scripts {
 			if script.ID == "ssl-enum-ciphers" {
 				for _, elem := range script.Elems {
 					if strings.Contains(strings.ToLower(elem.Value), "handshake") ||
@@ -969,7 +969,7 @@ func categorizePortResult(portResult PortResult, nmapPort Port) (ScanStatus, str
 			}
 		}
 		// Check for timeout patterns
-		if nmapPort.State.Reason == "no-response" {
+		if tlsPort.State.Reason == "no-response" {
 			return StatusTimeout, "Connection timed out"
 		}
 		// Default: port is open but not using TLS
@@ -1116,36 +1116,36 @@ func scanHostPorts(host string, ports []string) IPResult {
 		return ipResult
 	}
 
-	var nmapResult NmapRun
-	if err := xml.Unmarshal(output, &nmapResult); err != nil {
-		ipResult.Error = fmt.Sprintf("failed to parse nmap XML: %v", err)
+	var scanResult ScanRun
+	if err := xml.Unmarshal(output, &scanResult); err != nil {
+		ipResult.Error = fmt.Sprintf("failed to parse scan XML: %v", err)
 		for _, portStr := range ports {
 			port, _ := strconv.Atoi(portStr)
 			ipResult.PortResults = append(ipResult.PortResults, PortResult{
 				Port:   port,
-				Error:  "nmap xml parse failed",
+				Error:  "scan xml parse failed",
 				Status: StatusError,
-				Reason: "Failed to parse nmap XML output",
+				Reason: "Failed to parse scan XML output",
 			})
 		}
 		return ipResult
 	}
 
 	resultsByPort := make(map[string]PortResult)
-	if len(nmapResult.Hosts) > 0 {
-		for _, nmapPort := range nmapResult.Hosts[0].Ports {
-			portNum, _ := strconv.Atoi(nmapPort.PortID)
+	if len(scanResult.Hosts) > 0 {
+		for _, tlsPort := range scanResult.Hosts[0].Ports {
+			portNum, _ := strconv.Atoi(tlsPort.PortID)
 			portResult := PortResult{
-				Port:     portNum,
-				Protocol: nmapPort.Protocol,
-				State:    nmapPort.State.State,
-				Service:  nmapPort.Service.Name,
-				NmapRun:  NmapRun{Hosts: []Host{{Ports: []Port{nmapPort}}}},
+				Port:       portNum,
+				Protocol:   tlsPort.Protocol,
+				State:      tlsPort.State.State,
+				Service:    tlsPort.Service.Name,
+				ScanRun: ScanRun{Hosts: []Host{{Ports: []Port{tlsPort}}}},
 			}
-			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.NmapRun)
-			// Set status and reason based on nmap results
-			portResult.Status, portResult.Reason = categorizePortResult(portResult, nmapPort)
-			resultsByPort[nmapPort.PortID] = portResult
+			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.ScanRun)
+			// Set status and reason based on scan results
+			portResult.Status, portResult.Reason = categorizePortResult(portResult, tlsPort)
+			resultsByPort[tlsPort.PortID] = portResult
 		}
 	}
 

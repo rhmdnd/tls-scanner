@@ -64,8 +64,8 @@ func printClusterResults(results ScanResults) {
 			}
 
 			// Print SSL cipher information if available
-			if len(portResult.NmapRun.Hosts) > 0 {
-				for _, host := range portResult.NmapRun.Hosts {
+			if len(portResult.ScanRun.Hosts) > 0 {
+				for _, host := range portResult.ScanRun.Hosts {
 					for _, port := range host.Ports {
 						for _, script := range port.Scripts {
 							if script.ID == "ssl-enum-ciphers" {
@@ -81,7 +81,7 @@ func printClusterResults(results ScanResults) {
 	}
 }
 
-func printParsedResults(run NmapRun) {
+func printParsedResults(run ScanRun) {
 	if len(run.Hosts) == 0 {
 		log.Println("No hosts were scanned or host is down.")
 		return
