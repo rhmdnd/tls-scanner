@@ -13,6 +13,9 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// ScanRun and related types below are parse-only types used to unmarshal nmap
+// XML output. Other scanning implementations do not need to use this if they
+// can map the appropriate information into IPResult and PortResult directly.
 type ScanRun struct {
 	XMLName xml.Name `xml:"scanrun" json:"-"`
 	Hosts   []Host   `xml:"host" json:"hosts"`
@@ -141,7 +144,6 @@ type PortResult struct {
 	Service                      string                     `json:"service"`
 	ProcessName                  string                     `json:"process_name,omitempty"`
 	ContainerName                string                     `json:"container_name,omitempty"`
-	ScanRun                      ScanRun                    `json:"scan_details,omitempty"`
 	TlsVersions                  []string                   `json:"tls_versions,omitempty"`
 	TlsCiphers                   []string                   `json:"tls_ciphers,omitempty"`
 	TlsCipherStrength            map[string]string          `json:"tls_cipher_strength,omitempty"`

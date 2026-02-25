@@ -335,13 +335,12 @@ func main() {
 			if port, err := strconv.Atoi(tlsPort.PortID); err == nil {
 				singleResult.IPResults[0].OpenPorts = append(singleResult.IPResults[0].OpenPorts, port)
 				portResult := PortResult{
-					Port:       port,
-					Protocol:   tlsPort.Protocol,
-					State:      tlsPort.State.State,
-					Service:    tlsPort.Service.Name,
-					ScanRun: scanResult,
+					Port:     port,
+					Protocol: tlsPort.Protocol,
+					State:    tlsPort.State.State,
+					Service:  tlsPort.Service.Name,
 				}
-				portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.ScanRun)
+				portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(scanResult)
 
 				// Check compliance if TLS config is available
 				if tlsConfig != nil && len(portResult.TlsCiphers) > 0 {
@@ -358,7 +357,7 @@ func main() {
 		if !filepath.IsAbs(jsonPath) {
 			jsonPath = filepath.Join(*artifactDir, *jsonFile)
 		}
-		if err := writeJSONOutput(scanResult, jsonPath); err != nil {
+		if err := writeJSONOutput(singleResult, jsonPath); err != nil {
 			log.Fatalf("Error writing JSON output: %v", err)
 		}
 		log.Printf("JSON results written to %s", jsonPath)
@@ -387,7 +386,7 @@ func main() {
 	}
 
 	if *jsonFile == "" && *csvFile == "" {
-		printParsedResults(scanResult)
+		printParsedResults(singleResult)
 	}
 
 	finalScanResults = &singleResult
@@ -875,14 +874,14 @@ func scanIP(k8sClient *K8sClient, ip string, pod PodInfo, tlsSecurityProfile *TL
 	if len(scanResult.Hosts) > 0 {
 		for _, tlsPort := range scanResult.Hosts[0].Ports {
 			portNum, _ := strconv.Atoi(tlsPort.PortID)
+			singlePortRun := ScanRun{Hosts: []Host{{Ports: []Port{tlsPort}}}}
 			portResult := PortResult{
-				Port:       portNum,
-				Protocol:   tlsPort.Protocol,
-				State:      tlsPort.State.State,
-				Service:    tlsPort.Service.Name,
-				ScanRun: ScanRun{Hosts: []Host{{Ports: []Port{tlsPort}}}},
+				Port:     portNum,
+				Protocol: tlsPort.Protocol,
+				State:    tlsPort.State.State,
+				Service:  tlsPort.Service.Name,
 			}
-			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.ScanRun)
+			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(singlePortRun)
 
 			// Set status and reason based on scan results
 			portResult.Status, portResult.Reason = categorizePortResult(portResult, tlsPort)
@@ -1135,14 +1134,14 @@ func scanHostPorts(host string, ports []string) IPResult {
 	if len(scanResult.Hosts) > 0 {
 		for _, tlsPort := range scanResult.Hosts[0].Ports {
 			portNum, _ := strconv.Atoi(tlsPort.PortID)
+			singlePortRun := ScanRun{Hosts: []Host{{Ports: []Port{tlsPort}}}}
 			portResult := PortResult{
-				Port:       portNum,
-				Protocol:   tlsPort.Protocol,
-				State:      tlsPort.State.State,
-				Service:    tlsPort.Service.Name,
-				ScanRun: ScanRun{Hosts: []Host{{Ports: []Port{tlsPort}}}},
+				Port:     portNum,
+				Protocol: tlsPort.Protocol,
+				State:    tlsPort.State.State,
+				Service:  tlsPort.Service.Name,
 			}
-			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(portResult.ScanRun)
+			portResult.TlsVersions, portResult.TlsCiphers, portResult.TlsCipherStrength = extractTLSInfo(singlePortRun)
 			// Set status and reason based on scan results
 			portResult.Status, portResult.Reason = categorizePortResult(portResult, tlsPort)
 			resultsByPort[tlsPort.PortID] = portResult
