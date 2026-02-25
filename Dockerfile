@@ -12,12 +12,13 @@ RUN make
 FROM registry.ci.openshift.org/ocp/4.21:base-rhel9
 
 ARG OC_VERSION=latest
+ARG TARGETARCH
 
 RUN dnf -y update && \
     dnf install -y binutils file go podman runc jq skopeo nmap tar lsof && \
     dnf clean all
 
-RUN wget -O "openshift-client-linux-${OC_VERSION}.tar.gz" "https://mirror.openshift.com/pub/openshift-v4/amd64/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" && \
+RUN wget -O "openshift-client-linux-${OC_VERSION}.tar.gz" "https://mirror.openshift.com/pub/openshift-v4/${TARGETARCH}/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" && \
     tar -C /usr/local/bin -xzvf "openshift-client-linux-$OC_VERSION.tar.gz" oc && \
     rm -f "openshift-client-linux-$OC_VERSION.tar.gz"
 

@@ -12,10 +12,13 @@ RUN make
 FROM registry.fedoraproject.org/fedora:latest
 
 ARG OC_VERSION=latest
+ARG TARGETARCH
 
 RUN dnf -y update &&     dnf install -y binutils file golang podman runc jq skopeo nmap tar lsof wget openssl &&     dnf clean all
 
-RUN wget -O "openshift-client-linux-${OC_VERSION}.tar.gz" "https://mirror.openshift.com/pub/openshift-v4/amd64/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" &&     tar -C /usr/local/bin -xzvf "openshift-client-linux-$OC_VERSION.tar.gz" oc &&     rm -f "openshift-client-linux-$OC_VERSION.tar.gz"
+RUN wget -O "openshift-client-linux-${OC_VERSION}.tar.gz" "https://mirror.openshift.com/pub/openshift-v4/${TARGETARCH}/clients/ocp/${OC_VERSION}/openshift-client-linux.tar.gz" && \
+    tar -C /usr/local/bin -xzvf "openshift-client-linux-$OC_VERSION.tar.gz" oc && \
+    rm -f "openshift-client-linux-$OC_VERSION.tar.gz"
 
 COPY --from=builder /app/bin/tls-scanner /usr/local/bin/tls-scanner
 
