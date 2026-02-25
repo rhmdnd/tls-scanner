@@ -91,53 +91,7 @@ func main() {
 		scanResults := performTargetsScan(targetsByHost, *concurrentScans)
 		finalScanResults = &scanResults
 
-		// Create artifact directory if it doesn't exist
-		if *csvFile != "" || *jsonFile != "" || *junitFile != "" {
-			if err := os.MkdirAll(*artifactDir, 0755); err != nil {
-				log.Fatalf("Could not create artifact directory %s: %v", *artifactDir, err)
-			}
-			log.Printf("Artifacts will be saved to: %s", *artifactDir)
-		}
-
-		// Write JSON if also requested
-		if *jsonFile != "" {
-			jsonPath := *jsonFile
-			if !filepath.IsAbs(jsonPath) {
-				jsonPath = filepath.Join(*artifactDir, *jsonFile)
-			}
-			if err := writeJSONOutput(scanResults, jsonPath); err != nil {
-				log.Printf("Error writing JSON output: %v", err)
-			} else {
-				log.Printf("JSON results written to: %s", jsonPath)
-			}
-		}
-
-		// Write CSV output
-		if *csvFile != "" {
-			csvPath := *csvFile
-			if !filepath.IsAbs(csvPath) {
-				csvPath = filepath.Join(*artifactDir, *csvFile)
-			}
-			if err := writeCSVOutput(scanResults, csvPath); err != nil {
-				log.Printf("Error writing CSV output: %v", err)
-			} else {
-				log.Printf("CSV results written to: %s", csvPath)
-			}
-		}
-		// Write JUnit XML output
-		if *junitFile != "" {
-			junitPath := *junitFile
-			if !filepath.IsAbs(junitPath) {
-				junitPath = filepath.Join(*artifactDir, *junitFile)
-			}
-			if err := writeJUnitOutput(scanResults, junitPath); err != nil {
-				log.Printf("Error writing JUnit XML output: %v", err)
-			} else {
-				log.Printf("JUnit XML results written to: %s", junitPath)
-			}
-		}
-
-		// Print to console if no output files specified
+		writeOutputFiles(scanResults, *artifactDir, *jsonFile, *csvFile, *junitFile)
 		if *jsonFile == "" && *csvFile == "" && *junitFile == "" {
 			printClusterResults(scanResults)
 		}
@@ -217,76 +171,13 @@ func main() {
 	}
 
 	if len(allPodsInfo) > 0 {
-		var scanResults ScanResults
+		scanResults := performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
+		finalScanResults = &scanResults
 
-		if *csvFile != "" || *jsonFile != "" || *junitFile != "" {
-			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
-
-			// Create artifact directory if it doesn't exist
-			if err := os.MkdirAll(*artifactDir, 0755); err != nil {
-				log.Fatalf("Could not create artifact directory %s: %v", *artifactDir, err)
-			}
-			log.Printf("Artifacts will be saved to: %s", *artifactDir)
-
-			// Write JSON if also requested
-			if *jsonFile != "" {
-				jsonPath := *jsonFile
-				if !filepath.IsAbs(jsonPath) {
-					jsonPath = filepath.Join(*artifactDir, *jsonFile)
-				}
-				if err := writeJSONOutput(scanResults, jsonPath); err != nil {
-					log.Printf("Error writing JSON output: %v", err)
-				} else {
-					log.Printf("JSON results written to: %s", jsonPath)
-				}
-			}
-
-			// Write CSV output
-			if *csvFile != "" {
-				csvPath := *csvFile
-				if !filepath.IsAbs(csvPath) {
-					csvPath = filepath.Join(*artifactDir, *csvFile)
-				}
-				if err := writeCSVOutput(scanResults, csvPath); err != nil {
-					log.Printf("Error writing CSV output: %v", err)
-				} else {
-					log.Printf("CSV results written to: %s", csvPath)
-				}
-
-				// Write scan errors CSV if there are any errors
-				if len(scanResults.ScanErrors) > 0 {
-					errorFilename := strings.TrimSuffix(csvPath, filepath.Ext(csvPath)) + "_errors.csv"
-					if err := writeScanErrorsCSV(scanResults, errorFilename); err != nil {
-						log.Printf("Error writing scan errors CSV: %v", err)
-					} else {
-						log.Printf("Scan errors written to: %s", errorFilename)
-					}
-				}
-			}
-			// Write JUnit XML output
-			if *junitFile != "" {
-				junitPath := *junitFile
-				if !filepath.IsAbs(junitPath) {
-					junitPath = filepath.Join(*artifactDir, *junitFile)
-				}
-				if err := writeJUnitOutput(scanResults, junitPath); err != nil {
-					log.Printf("Error writing JUnit XML output: %v", err)
-				} else {
-					log.Printf("JUnit XML results written to: %s", junitPath)
-				}
-			}
-
-			// Print to console if no output files specified
-			if *jsonFile == "" {
-				printClusterResults(scanResults)
-			}
-		} else {
-			// Console output only
-			scanResults = performClusterScan(allPodsInfo, *concurrentScans, k8sClient)
+		writeOutputFiles(scanResults, *artifactDir, *jsonFile, *csvFile, *junitFile)
+		if *jsonFile == "" && *csvFile == "" && *junitFile == "" {
 			printClusterResults(scanResults)
 		}
-
-		finalScanResults = &scanResults
 
 		return
 	}
@@ -352,40 +243,8 @@ func main() {
 		}
 	}
 
-	if *jsonFile != "" {
-		jsonPath := *jsonFile
-		if !filepath.IsAbs(jsonPath) {
-			jsonPath = filepath.Join(*artifactDir, *jsonFile)
-		}
-		if err := writeJSONOutput(singleResult, jsonPath); err != nil {
-			log.Fatalf("Error writing JSON output: %v", err)
-		}
-		log.Printf("JSON results written to %s", jsonPath)
-	}
-
-	if *csvFile != "" {
-		csvPath := *csvFile
-		if !filepath.IsAbs(csvPath) {
-			csvPath = filepath.Join(*artifactDir, *csvFile)
-		}
-
-		if err := writeCSVOutput(singleResult, csvPath); err != nil {
-			log.Fatalf("Error writing CSV output: %v", err)
-		}
-		log.Printf("CSV results written to %s", csvPath)
-
-		// Write scan errors CSV if there are any errors
-		if len(singleResult.ScanErrors) > 0 {
-			errorFilename := strings.TrimSuffix(csvPath, filepath.Ext(csvPath)) + "_errors.csv"
-			if err := writeScanErrorsCSV(singleResult, errorFilename); err != nil {
-				log.Printf("Error writing scan errors CSV: %v", err)
-			} else {
-				log.Printf("Scan errors written to: %s", errorFilename)
-			}
-		}
-	}
-
-	if *jsonFile == "" && *csvFile == "" {
+	writeOutputFiles(singleResult, *artifactDir, *jsonFile, *csvFile, *junitFile)
+	if *jsonFile == "" && *csvFile == "" && *junitFile == "" {
 		printParsedResults(singleResult)
 	}
 
