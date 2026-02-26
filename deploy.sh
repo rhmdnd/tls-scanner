@@ -30,6 +30,8 @@ JOB_TEMPLATE=${JOB_TEMPLATE_FILE:-"scanner-job.yaml.template"}
 SCAN_MODE=${SCAN_MODE:-"pod"}
 JOB_NAME="tls-scanner-job"
 LIMIT_IPS="${LIMIT_IPS:-0}"  # Limit number of IPs to scan (0 = no limit, useful for testing)
+# Architectures to build container images for
+BUILD_PLATFORMS="linux/amd64,linux/arm64,linux/s390x,linux/ppc64le"
 
 # TLS test configuration
 TLS_TEST_TIMEOUT=${TLS_TEST_TIMEOUT:-600}  # 10 minutes default, configurable
@@ -77,10 +79,10 @@ build_image() {
     fi
 
     if command -v podman &> /dev/null; then
-        podman build --platform linux/amd64,linux/arm64 -t ${SCANNER_IMAGE} -f ${DOCKERFILE} .
+        podman build --platform ${BUILD_PLATFORMS} -t ${SCANNER_IMAGE} -f ${DOCKERFILE} .
         check_error "Podman build"
     elif command -v docker &> /dev/null; then
-        docker build --platform linux/amd64,linux/arm64 -t ${SCANNER_IMAGE} -f ${DOCKERFILE} .
+        docker build --platform ${BUILD_PLATFORMS} -t ${SCANNER_IMAGE} -f ${DOCKERFILE} .
         check_error "Docker build"
     fi
     echo "--> Image built: ${SCANNER_IMAGE}"
