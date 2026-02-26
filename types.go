@@ -17,7 +17,11 @@ import (
 // XML output. Other scanning implementations do not need to use this if they
 // can map the appropriate information into IPResult and PortResult directly.
 type ScanRun struct {
-	XMLName xml.Name `xml:"scanrun" json:"-"`
+	// This must be nmaprun, even though we've decouple nmap from the name
+	// of all other variables and implementation details because the root
+	// of the XML tree we care about is `nmaprun`. This will eventually go
+	// away when we move to a more modern scanner (e.g., testssl.sh).
+	XMLName xml.Name `xml:"nmaprun" json:"-"`
 	Hosts   []Host   `xml:"host" json:"hosts"`
 }
 
