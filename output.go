@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -129,4 +130,60 @@ func writeJSONOutput(data interface{}, filename string) error {
 
 	log.Printf("JSON output written to: %s", filename)
 	return nil
+}
+
+func writeOutputFiles(results ScanResults, artifactDir, jsonFile, csvFile, junitFile string) {
+	if jsonFile == "" && csvFile == "" && junitFile == "" {
+		return
+	}
+
+	if err := os.MkdirAll(artifactDir, 0755); err != nil {
+		log.Fatalf("Could not create artifact directory %s: %v", artifactDir, err)
+	}
+	log.Printf("Artifacts will be saved to: %s", artifactDir)
+
+	if jsonFile != "" {
+		jsonPath := jsonFile
+		if !filepath.IsAbs(jsonPath) {
+			jsonPath = filepath.Join(artifactDir, jsonFile)
+		}
+		if err := writeJSONOutput(results, jsonPath); err != nil {
+			log.Printf("Error writing JSON output: %v", err)
+		} else {
+			log.Printf("JSON results written to: %s", jsonPath)
+		}
+	}
+
+	if csvFile != "" {
+		csvPath := csvFile
+		if !filepath.IsAbs(csvPath) {
+			csvPath = filepath.Join(artifactDir, csvFile)
+		}
+		if err := writeCSVOutput(results, csvPath); err != nil {
+			log.Printf("Error writing CSV output: %v", err)
+		} else {
+			log.Printf("CSV results written to: %s", csvPath)
+		}
+
+		if len(results.ScanErrors) > 0 {
+			errorFilename := strings.TrimSuffix(csvPath, filepath.Ext(csvPath)) + "_errors.csv"
+			if err := writeScanErrorsCSV(results, errorFilename); err != nil {
+				log.Printf("Error writing scan errors CSV: %v", err)
+			} else {
+				log.Printf("Scan errors written to: %s", errorFilename)
+			}
+		}
+	}
+
+	if junitFile != "" {
+		junitPath := junitFile
+		if !filepath.IsAbs(junitPath) {
+			junitPath = filepath.Join(artifactDir, junitFile)
+		}
+		if err := writeJUnitOutput(results, junitPath); err != nil {
+			log.Printf("Error writing JUnit XML output: %v", err)
+		} else {
+			log.Printf("JUnit XML results written to: %s", junitPath)
+		}
+	}
 }
