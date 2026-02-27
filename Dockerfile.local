@@ -1,6 +1,6 @@
-FROM docker.io/library/golang:1.24 AS builder
+FROM registry.access.redhat.com/ubi9/go-toolset:1.24 as builder
 
-WORKDIR /app
+WORKDIR /opt/app-root/src
 
 COPY go.mod go.sum ./
 RUN go mod download
@@ -20,7 +20,7 @@ RUN wget -O "openshift-client-linux-${OC_VERSION}.tar.gz" "https://mirror.opensh
     tar -C /usr/local/bin -xzvf "openshift-client-linux-$OC_VERSION.tar.gz" oc && \
     rm -f "openshift-client-linux-$OC_VERSION.tar.gz"
 
-COPY --from=builder /app/bin/tls-scanner /usr/local/bin/tls-scanner
+COPY --from=builder /opt/app-root/src/bin/tls-scanner /usr/local/bin/tls-scanner
 
 ENTRYPOINT ["/usr/local/bin/tls-scanner"]
 
