@@ -1,5 +1,5 @@
 bin/*
-tls-scanner
+/tls-scanner
 
 # Test artifacts and results
 artifacts/
@@ -8,3 +8,4 @@ test-run.log
 test-tls13-run.log
 tls13-scan.log
 *-scan.log
+bench.sh
